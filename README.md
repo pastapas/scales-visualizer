@@ -47,7 +47,7 @@ The firmware assumes 700 counts/g, so the real Sensitivity ranges are ~225 / 450
 
 Grams are computed from CC90, so the precision is one CC step: 1.8 g (sens 0) … 14 g (sens 4). Below one step the screen
 shows a bound (`<15 g`). Precise weight on every range needs a firmware change: the device would have to send the weight
-itself (see `firmware/`).
+itself (see `firmware/README.md`).
 
 How the calibration was measured: SysEx `F0 0B 14 0D 02 F7` (logging on) and `F0 0B 14 0D 00 F7` (test mode) make the device
 print `SCALE VALUE: <raw>` on its USB serial port while weight is on. `F0 0B 14 0D 01 F7` / `03` switch it back.
