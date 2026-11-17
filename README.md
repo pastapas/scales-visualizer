@@ -22,7 +22,7 @@ Without a device: drag up/down on the screen to simulate weight.
 | M | Hold / Arpeggio (simulator) |
 | B | normal / screen blending |
 | G | grams readout on/off |
-| V | turn the point of view (as on unmute) |
+| V | walk round to another side (as on unmute) |
 | K | note map panel |
 | C | clear |
 | F | fullscreen |
@@ -34,7 +34,8 @@ Without a device: drag up/down on the screen to simulate weight.
 - **Hold**: a saved note is detected when the old weight note does not get its note-off (it was stuck with "+").
   MUTE dims the saved shapes in place; they light up again on unmute. After TARE they fade out.
 - **Unmute turns the view**: every unmute (Hold: stuck notes sound again; Arpeggio: the arp comes back after a pause)
-  slowly turns all shapes (8 s) to a new random point of view — from the side, the top or below — and they stay there.
+  the camera slowly (10 s) walks round the shapes to a new side; the shapes and the lights stay where they are
+  (saved shapes have depth, so from the side they stand behind each other). It stays there until the next unmute.
 - **Arpeggio**: arp steps are told apart from weight notes by timing. The firmware sends the weight note in the
   same millisecond as its CC and turns the old weight note off first; arp steps come on a fixed grid (Arp Rate × BPM),
   which the page learns. Saved arp notes stay in place, breathe and flash on each step.
