@@ -22,6 +22,7 @@ Without a device: drag up/down on the screen to simulate weight.
 | M | Hold / Arpeggio (simulator) |
 | B | normal / screen blending |
 | G | grams readout on/off |
+| K | note map panel |
 | C | clear |
 | F | fullscreen |
 | H | hide help |
@@ -37,6 +38,15 @@ Without a device: drag up/down on the screen to simulate weight.
 - **Play mode** is polled every 1.5 s (`F0 14 0D 61 <req> 16 F7`): the device does not report a mode change made with its button.
 - **Colors** go by save order: red, orange, yellow, green, blue, purple, dark (like the photo stack). **Form** goes by note
   (10 objects from `models/Scales Objects.stl`).
+
+## Note map (needs the firmware from `firmware/`)
+
+Press **K** or the "note map" button. Put an object on the scales, pick a note, press **Learn this weight**: the device
+stores the weight of the object for that note (up to 16 objects, saved on the device). With the map on, the weight plays
+the note of the nearest learned object in Hold, Arpeggio and BPM modes, also without the computer. Zones are split halfway
+between learned weights. The next note is preselected one step up the major scale.
+
+With this firmware the page also turns on the weight stream, so grams are precise (0.1 g) on every Sensitivity.
 
 ## Weight in grams
 

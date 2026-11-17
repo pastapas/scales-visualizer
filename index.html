@@ -25,11 +25,55 @@
     font: 15px/1.5 ui-monospace, Menlo, monospace; background: rgba(0,0,0,.6); cursor: pointer; text-align: center;
   }
   #start span { opacity: .55; font-size: 12px; }
+  #mapBtn {
+    position: fixed; right: 16px; bottom: 14px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+    font: 12px ui-monospace, Menlo, monospace; color: rgba(255,255,255,.8); background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.18); transition: opacity .6s;
+  }
+  #map {
+    position: fixed; right: 16px; top: 16px; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 80px);
+    overflow: auto; display: none; padding: 14px 16px; border-radius: 10px; color: #fff; box-sizing: border-box;
+    background: rgba(18,18,22,.88); border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(8px);
+    font: 12px/1.5 ui-monospace, Menlo, monospace;
+  }
+  #map.open { display: block; }
+  #map h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+  #map p { margin: 4px 0 10px; color: rgba(255,255,255,.6); }
+  #map .now { font: 200 34px/1.1 "Helvetica Neue", Helvetica, Arial, sans-serif; margin: 6px 0 10px; }
+  #map table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; }
+  #map td { padding: 4px 4px; border-top: 1px solid rgba(255,255,255,.08); }
+  #map td.w { text-align: right; font-variant-numeric: tabular-nums; }
+  #map select, #map button {
+    font: inherit; color: #fff; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.2);
+    border-radius: 5px; padding: 3px 6px;
+  }
+  #map button { cursor: pointer; }
+  #map button.primary { background: #fff; color: #000; border-color: #fff; }
+  #map button:disabled { opacity: .35; cursor: default; }
+  #map .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+  #map .warn { color: #ffb84d; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="grams"></div>
+<button id="mapBtn">note map</button>
+<div id="map">
+  <h3>Note map</h3>
+  <p>Put an object on the scales, pick a note and press Learn. The weight then plays the note of the nearest learned object.</p>
+  <div id="mapStatus"></div>
+  <div class="now" id="mapNow">–</div>
+  <div class="row">
+    <select id="mapNote"></select>
+    <button class="primary" id="mapLearn">Learn this weight</button>
+  </div>
+  <table id="mapTable"></table>
+  <div class="row">
+    <label><input type="checkbox" id="mapOn"> map on</label>
+    <button id="mapClear">Delete all</button>
+    <button id="mapClose">Close</button>
+  </div>
+</div>
 <div id="hud"></div>
 <div id="start">click to start<br><span>connect Scales via USB · or drag up/down on screen to simulate weight</span></div>
 <script type="importmap">
@@ -189,16 +233,19 @@ function placeShape(s, t, order) {
 // ---------------------------------------------------------------- state from MIDI
 const st = {
   cc: 0, lastCC: -1e9, sensorNote: -1, sensorOffAt: -1e9, arpLast: 0, arpPeriod: 0, bend: 0,
-  mode: 'hold', modeSrc: 'manual', lastNote: -1, sens: 4,
+  mode: 'hold', modeSrc: 'manual', lastNote: -1, sens: 4, weightCounts: 0, weightAt: -1e9,
 };
 // weight in grams from the CC: the firmware maps the Sensitivity range (in sensor counts) to CC 0..127
 const SENS_RANGE_COUNTS = [175000, 350000, 700000, 1050000, 1400000];
 function grams() {
+  if (precise()) return Math.max(0, st.weightCounts / CFG.countsPerGram);
   if (st.cc <= 0) return 0;
   const step = Math.floor(SENS_RANGE_COUNTS[st.sens] / 127);
   return ((st.cc + 0.5) * step + CFG.tareMarginCounts) / CFG.countsPerGram;
 }
-const gramsStep = () => Math.floor(SENS_RANGE_COUNTS[st.sens] / 127) / CFG.countsPerGram;
+const gramsStep = () => precise() ? 1 / CFG.countsPerGram : Math.floor(SENS_RANGE_COUNTS[st.sens] / 127) / CFG.countsPerGram;
+// the device sends its weight (firmware with the weight stream, setting 18)
+const precise = () => performance.now() - st.weightAt < 3000;
 
 const liveSize = () => {
   const v = st.cc / 127;
@@ -490,6 +537,12 @@ function onMidi(e) {
 function onSysex(d) {
   // Scales settings protocol: VALUE F0 14 0D 68 req status id val F7, CHANGED F0 14 0D 69 id val F7
   if (d[1] !== 0x14 || d[2] !== 0x0D) return;
+  const w4 = i => ((d[i] | d[i + 1] << 7 | d[i + 2] << 14 | d[i + 3] << 21) - (1 << 27));
+  if (d[3] === 0x72) { st.weightCounts = w4(4); st.weightAt = performance.now(); return; }   // weight stream
+  if (d[3] === 0x75) { noteMap.points[d[4]] = d[5] === 127 ? null : { note: d[5], counts: w4(6) }; noteMap.supported = true; renderMap(); return; }
+  if (d[3] === 0x77) { noteMap.count = d[4]; noteMap.supported = true; renderMap(); return; }
+  // the firmware does not know the note map / weight stream settings
+  if (d[3] === 0x68 && d[5] === 1 && (d[6] === 17 || d[6] === 18)) { noteMap.supported = false; renderMap(); return; }
   let id, val;
   if (d[3] === 0x68 && d[5] === 0) { id = d[6]; val = d[7]; }
   else if (d[3] === 0x69) { id = d[4]; val = d[5]; }
@@ -497,15 +550,18 @@ function onSysex(d) {
   if (id === 16 && MODES[val]) setMode(MODES[val], 'device');
   if (id === 8) CFG.ccNum = val;
   if (id === 1 && val <= 4) st.sens = val;
+  if (id === 17) { noteMap.on = !!val; noteMap.supported = true; renderMap(); }
+  if (id === 18) noteMap.supported = true;
 }
 function askDevice() {
   if (!midi.access || !midi.sysex) return;
   for (const o of midi.access.outputs.values()) {
     if (!/scales/i.test(o.name)) continue;
     // one request at a time: the device does not answer requests sent together
-    [[2, 8], [3, 1], [1, 16]].forEach(([req, id], i) => setTimeout(() => {
-      try { o.send([0xF0, 0x14, 0x0D, 0x61, req, id, 0xF7]); } catch (e) {}
-    }, 300 + i * 250));   // music CC number, play mode
+    const q = [[0x61, 2, 8], [0x61, 3, 1], [0x61, 1, 16], [0x62, 4, 18, 1], [0x61, 5, 17], [0x76]];
+    q.forEach((m, i) => setTimeout(() => {
+      try { o.send([0xF0, 0x14, 0x0D, ...m, 0xF7]); } catch (e) {}
+    }, 300 + i * 250));   // CC number, sensitivity, play mode, weight stream on, note map on, note map points
   }
 }
 function bindInputs() {
@@ -592,6 +648,7 @@ cv.addEventListener('pointercancel', () => { dragging = false; sim.setWeight(0);
 
 addEventListener('keydown', e => {
   hudActive = performance.now();
+  if (e.target.closest && e.target.closest('#map')) return;
   const k = e.key.toLowerCase();
   if (k === ' ' || k === '+' || k === '=') { e.preventDefault(); sim.plus(); }
   else if (k === 't') sim.tare();
@@ -599,30 +656,99 @@ addEventListener('keydown', e => {
   else if (k === 'b') blendScreen = !blendScreen;
   else if (k === 'h') hudHidden = !hudHidden;
   else if (k === 'g') gramsHidden = !gramsHidden;
+  else if (k === 'k') toggleMap();
   else if (k === 'c') allOff();
   else if (k === 'f') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
 });
 addEventListener('pointermove', () => { hudActive = performance.now(); });
 
+
+// ---------------------------------------------------------------- note map (firmware with note map, SysEx 74-77)
+const noteMap = { points: new Array(16).fill(null), on: false, supported: null, count: 0 };
+const nmEl = id => document.getElementById(id);
+const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+function sendScales(bytes) {
+  if (!midi.access) return false;
+  for (const o of midi.access.outputs.values()) {
+    if (/scales/i.test(o.name)) { try { o.send([0xF0, 0x14, 0x0D, ...bytes, 0xF7]); return true; } catch (e) {} }
+  }
+  return false;
+}
+{
+  const sel = nmEl('mapNote');
+  for (let n = 24; n <= 108; n++) sel.add(new Option(noteName(n), n));
+  sel.value = 48;
+}
+function toggleMap(open) {
+  const el = nmEl('map');
+  const show = open === undefined ? !el.classList.contains('open') : open;
+  el.classList.toggle('open', show);
+  if (show) { sendScales([0x61, 6, 17]); sendScales([0x76]); renderMap(); }
+}
+function renderMap() {
+  const status = nmEl('mapStatus');
+  if (!midi.isScales) status.innerHTML = '<p class="warn">Connect Scales (click to start, allow MIDI with SysEx).</p>';
+  else if (noteMap.supported === false) status.innerHTML = '<p class="warn">This firmware has no note map. Flash the build from the sasha/weight-notes branch.</p>';
+  else status.innerHTML = '';
+  nmEl('mapOn').checked = noteMap.on;
+  const rows = noteMap.points.map((p, i) => p && { ...p, i }).filter(Boolean).sort((a, b) => a.counts - b.counts);
+  nmEl('mapTable').innerHTML = rows.length
+    ? rows.map(p => `<tr><td><b>${noteName(p.note)}</b></td><td class="w">${(p.counts / CFG.countsPerGram).toFixed(1)} g</td>` +
+        `<td style="text-align:right"><button data-del="${p.i}">delete</button></td></tr>`).join('')
+    : '<tr><td style="color:rgba(255,255,255,.5)">No points yet</td></tr>';
+  nmEl('mapLearn').disabled = !midi.isScales || noteMap.supported === false;
+}
+nmEl('mapBtn').addEventListener('click', () => toggleMap());
+nmEl('mapClose').addEventListener('click', () => toggleMap(false));
+nmEl('mapLearn').addEventListener('click', () => {
+  const note = +nmEl('mapNote').value;
+  // same note again: learn it again in its slot, otherwise the first free slot
+  let idx = noteMap.points.findIndex(p => p && p.note === note);
+  if (idx < 0) idx = noteMap.points.findIndex(p => !p);
+  if (idx < 0) { alert('All 16 points are used: delete one first.'); return; }
+  sendScales([0x74, idx, note]);
+  if (!noteMap.on) { sendScales([0x62, 7, 17, 1]); noteMap.on = true; }
+  // next note up the major scale, for the next object
+  const sel = nmEl('mapNote'); const MAJ = [0, 2, 4, 5, 7, 9, 11];
+  let n = note + 1; while (!MAJ.includes(n % 12)) n++;
+  if (n <= 108) sel.value = n;
+});
+nmEl('mapTable').addEventListener('click', e => {
+  const i = e.target.dataset && e.target.dataset.del;
+  if (i !== undefined) sendScales([0x75, +i, 127, 0, 0, 0, 0]);
+});
+nmEl('mapOn').addEventListener('change', e => { noteMap.on = e.target.checked; sendScales([0x62, 8, 17, e.target.checked ? 1 : 0]); });
+nmEl('mapClear').addEventListener('click', () => {
+  if (!confirm('Delete all learned points on the device?')) return;
+  noteMap.points.fill(null); sendScales([0x77]); renderMap();
+});
+function updateMapNow() {
+  if (!nmEl('map').classList.contains('open')) return;
+  nmEl('mapNow').textContent = precise() ? grams().toFixed(1) + ' g' : (midi.isScales ? '≈ ' + Math.round(grams()) + ' g' : '–');
+}
+
 // ---------------------------------------------------------------- HUD
 const hud = document.getElementById('hud');
 const gramsEl = document.getElementById('grams');
+const mapBtn = document.getElementById('mapBtn');
 let gramsShown = 0, gramsHidden = false;
 function updateHud(now) {
   const name = st.lastNote >= 0 ? NOTE_NAMES[st.lastNote % 12] + (Math.floor(st.lastNote / 12) - 1) : '–';
   hud.innerHTML =
-    `<b>${midi.isScales ? '● Scales' : '○ ' + midi.status}</b> · mode <b>${st.mode.toUpperCase()}</b> (${st.modeSrc}) · note <b>${name}</b> · CC${CFG.ccNum} <b>${st.cc}</b> · <b>≈ ${Math.round(grams())} g</b> (±${(gramsStep() / 2).toFixed(1)}, sens ${st.sens}) · shapes ${shapes.length}${blendScreen ? ' · screen' : ''}<br>` +
-    `drag ↕ = weight · space = + · T = tare · M = hold/arp · B = blend · C = clear · G = grams · F = fullscreen · H = hide`;
+    `<b>${midi.isScales ? '● Scales' : '○ ' + midi.status}</b> · mode <b>${st.mode.toUpperCase()}</b> (${st.modeSrc}) · note <b>${name}</b> · CC${CFG.ccNum} <b>${st.cc}</b> · <b>≈ ${Math.round(grams())} g</b> (${precise() ? "precise" : "±" + (gramsStep() / 2).toFixed(1)}, sens ${st.sens}) · shapes ${shapes.length}${blendScreen ? ' · screen' : ''}<br>` +
+    `drag ↕ = weight · space = + · T = tare · M = hold/arp · B = blend · C = clear · G = grams · K = note map · F = fullscreen · H = hide`;
   hud.style.opacity = hudHidden ? 0 : (now - hudActive > 4000 ? 0.15 : 1);
+  mapBtn.style.opacity = now - hudActive > 4000 ? 0.15 : 1;
+  updateMapNow();
   // big weight readout: rolls smoothly to the new value, rounded to whole grams
   const g = grams();
   gramsShown += (g - gramsShown) * 0.25;
-  if (Math.abs(g - gramsShown) < 0.5) gramsShown = g;
+  if (Math.abs(g - gramsShown) < (precise() ? 0.05 : 0.5)) gramsShown = g;
   // there is weight (a note sounds) but less than one CC step: show the bound instead of 0
-  const below = st.cc === 0 && st.sensorNote >= 0;
+  const below = !precise() && st.cc === 0 && st.sensorNote >= 0;
   const over = st.cc >= 127;
   const txt = below ? '&lt;' + Math.ceil(gramsStep() + CFG.tareMarginCounts / CFG.countsPerGram) + '<small>g</small>'
-    : (over ? '&gt;' : '') + Math.round(gramsShown) + '<small>g</small>';
+    : (over && !precise() ? '&gt;' : '') + (precise() && gramsShown < 100 ? gramsShown.toFixed(1) : Math.round(gramsShown)) + '<small>g</small>';
   if (txt !== gramsEl.dataset.v) { gramsEl.innerHTML = txt; gramsEl.dataset.v = txt; }
   gramsEl.style.opacity = gramsHidden ? 0 : (g > 0 || below ? 0.92 : 0.25);
 }
@@ -633,7 +759,7 @@ document.getElementById('start').addEventListener('click', e => {
   bells.init(); if (bells.ac.state === 'suspended') bells.ac.resume();
   initMidi();
 });
-window.app = { sim, setMode, frame, bells, st, shapes, midiLog, midi, onMidi, grams, getLive: () => live };   // for debugging in the console
+window.app = { sim, setMode, frame, bells, st, shapes, midiLog, midi, onMidi, grams, noteMap, getLive: () => live };   // for debugging in the console
 requestAnimationFrame(frame);
 </script>
 </body>

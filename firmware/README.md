@@ -30,7 +30,17 @@ The device sends the weight only as CC90 (0–127 over the Sensitivity range), s
 1.8 g at Sensitivity 0 … 14 g at Sensitivity 4. The load cell itself resolves ~0.01 g
 (776.8 counts/g measured, Sensorcon SC133-3KG, 1.0 ± 0.15 mV/V).
 
-## Proposal: precise weight message
+## Branch `sasha/weight-notes` (in `~/Projects/scales-firmware`, not pushed yet)
+
+Built file: `firmware/scales-weight-notes.uf2` (version 0.0.0, pico-sdk 2.3.1). What it adds, documented in the firmware's
+`SettingsDescription.md` ("Note Map", "Weight Stream"):
+
+- **Weight stream** (setting 18, not saved): `F0 14 0D 72 <w0..w3> F7` with the weight in sensor counts on every new sample.
+- **Note map** (setting 17 + SysEx 74 learn / 75 set / 76 get / 77 clear): up to 16 learned weight → note points, saved to
+  flash; the weight plays the nearest learned note instead of the scale.
+- Settings of the current firmware are kept on update (layout migration), the map starts empty.
+
+## Proposal: precise weight message (done in the branch above)
 
 - Every time the filtered weight changes (it is already filtered: 4-sample moving average, ~11 Hz), send on USB MIDI cable 1:
   `F0 14 0D 72 <w0> <w1> <w2> <w3> F7` — `measure_calculated_value` (raw − tare, counts, can be negative) as a signed
