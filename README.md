@@ -29,7 +29,7 @@ Without a device: drag up/down on the screen to simulate weight.
 
 ## How it reads the device
 
-- **Live shape**: one shape in the center. It grows with the weight and never shrinks, and changes form with the note, until "+" saves it.
+- **Live shape**: one shape in the center. Its size follows the weight (up and down) and it changes form with the note, until "+" saves it; a saved shape keeps its size.
 - **Hold**: a saved note is detected when the old weight note does not get its note-off (it was stuck with "+").
   MUTE dims the saved shapes in place; they light up again on unmute. After TARE they fade out.
 - **Arpeggio**: arp steps are told apart from weight notes by timing. The firmware sends the weight note in the

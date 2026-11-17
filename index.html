@@ -269,11 +269,15 @@ function pickSpot() {
   return best;
 }
 
-// a saved shape keeps the size it reached (it never shrinks)
+// a saved shape keeps the size the weight gave it. It is saved a moment after the weight changed
+// (taken off, next note), so take the biggest size of the last 0.7 s
 function fixShape(s, kind) {
   const [x, y] = pickSpot(), m = minDim();
   s.kind = kind; s.tx = x; s.ty = y;
-  s.tsize = Math.max(m * 0.05, s.tsize, s.size);
+  const now = performance.now();
+  let size = Math.max(s.tsize, s.size);
+  for (const [t, v] of s.hist) if (now - t < 700) size = Math.max(size, v);
+  s.tsize = Math.max(m * 0.05, size);
   // nothing else saved on screen: start the rainbow again from red
   if (!shapes.some(x => x !== s && x.kind !== 'live' && x.talpha > 0)) colorIdx = 0;
   s.tcolor = nextColor();
@@ -284,7 +288,7 @@ function fixShape(s, kind) {
 
 function killShape(s, speed = 1) { s.talpha = 0; s.fade = speed; }
 
-// One live shape in the center. It grows with the weight (never shrinks) and takes the color/form
+// One live shape in the center. Its size follows the weight (up and down) and it takes the color/form
 // of the current note, until "+" saves it. Then a new live shape starts.
 function spawnLive(note) {
   const s = makeShape(note, W / 2, H / 2, liveSize() * 0.6);
@@ -407,7 +411,11 @@ let lastFrame = performance.now(), hudActive = performance.now(), hudHidden = fa
 function frame(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000); lastFrame = now; T += dt;
 
-  if (live) live.tsize = Math.max(live.tsize, liveSize());   // grows, never shrinks
+  if (live) {
+    live.tsize = liveSize();   // follows the weight both ways
+    live.hist.push([now, live.tsize]);
+    while (live.hist.length && now - live.hist[0][0] > 1000) live.hist.shift();
+  }
 
   for (const s of shapes) {
     const kp = s.kind === 'live' ? 12 : 3.2;
