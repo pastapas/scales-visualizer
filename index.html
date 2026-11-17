@@ -70,6 +70,12 @@
   <table id="mapTable"></table>
   <div class="row">
     <label><input type="checkbox" id="mapOn"> map on</label>
+  </div>
+  <div class="row"><label style="flex:1">wait before a note <span id="settleV"></span><br>
+    <input type="range" id="settle" min="0" max="600" step="10" value="150" style="width:100%"></label></div>
+  <div class="row"><label style="flex:1">press for full bend <span id="bendV"></span><br>
+    <input type="range" id="bend" min="0" max="300" step="5" value="100" style="width:100%"></label></div>
+  <div class="row">
     <button id="mapClear">Delete all</button>
     <button id="mapClose">Close</button>
   </div>
@@ -220,6 +226,8 @@ function placeShape(s, t, order) {
   g.visible = R > 0.5 && s.alpha > 0.005;
   g.position.set((s.x - W / 2) * PX, -(s.y - H / 2) * PX, 0);
   g.scale.setScalar(Math.max(0.001, R * PX));
+  // a press on the object (pitch bend) squashes the live shape: flatter and wider when pressed
+  if (s === live && st.bend) { g.scale.y *= 1 - 0.3 * st.bend; g.scale.x *= 1 + 0.12 * st.bend; g.scale.z *= 1 + 0.12 * st.bend; }
   g.rotation.set(TILT + 0.06 * Math.sin(t * 0.5 + s.phase), 0, 0.05 * Math.sin(t * 0.37 + s.phase));
   s.mesh.rotation.y = s.rot;
   s.mesh.renderOrder = order;
@@ -565,6 +573,13 @@ function onSysex(d) {
   if (id === 1 && val <= 4) st.sens = val;
   if (id === 17) { noteMap.on = !!val; noteMap.supported = true; renderMap(); }
   if (id === 18) noteMap.supported = true;
+  if (id === 19 || id === 20) {
+    const v = d[3] === 0x68 ? d[7] | d[8] << 7 : d[5] | d[6] << 7;
+    const el = nmEl(id === 19 ? 'settle' : 'bend');
+    el.value = id === 19 ? v : Math.round(v * 100 / CFG.countsPerGram);
+    el.dispatchEvent(new Event('show'));
+    nmEl(id === 19 ? 'settleV' : 'bendV').textContent = id === 19 ? v + ' ms' : (v ? el.value + ' g' : 'off');
+  }
 }
 function askDevice() {
   if (!midi.access || !midi.sysex) return;
@@ -699,7 +714,7 @@ function toggleMap(open) {
   const el = nmEl('map');
   const show = open === undefined ? !el.classList.contains('open') : open;
   el.classList.toggle('open', show);
-  if (show) { sendScales([0x61, 6, 17]); sendScales([0x76]); renderMap(); }
+  if (show) { sendScales([0x61, 6, 17]); sendScales([0x61, 6, 19]); sendScales([0x61, 6, 20]); sendScales([0x76]); renderMap(); }
 }
 function renderMap() {
   const status = nmEl('mapStatus');
@@ -733,6 +748,16 @@ nmEl('mapTable').addEventListener('click', e => {
   const i = e.target.dataset && e.target.dataset.del;
   if (i !== undefined) sendScales([0x75, +i, 127, 0, 0, 0, 0]);
 });
+// 7-bit groups, lowest first, 2 groups (settings 19 and 20)
+const set2 = (id, v) => { sendScales([0x62, 9, id, v & 127, (v >> 7) & 127]); sendScales([0x61, 9, id]); };
+let sliderTimer = 0;
+function slider(el, out, fmt, send) {
+  const show = () => { nmEl(out).textContent = fmt(+nmEl(el).value); };
+  nmEl(el).addEventListener('input', () => { show(); clearTimeout(sliderTimer); sliderTimer = setTimeout(() => send(+nmEl(el).value), 250); });
+  show();
+}
+slider('settle', 'settleV', v => v + ' ms', v => set2(19, v));
+slider('bend', 'bendV', v => v ? v + ' g' : 'off', v => set2(20, Math.round(v * CFG.countsPerGram / 100)));
 nmEl('mapOn').addEventListener('change', e => { sendScales([0x62, 8, 17, e.target.checked ? 1 : 0]); sendScales([0x61, 8, 17]); });
 nmEl('mapClear').addEventListener('click', () => {
   if (!confirm('Delete all learned points on the device?')) return;
