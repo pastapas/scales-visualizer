@@ -40,13 +40,13 @@ Built file: `firmware/scales-weight-notes.uf2` (version 0.0.0, pico-sdk 2.3.1). 
   flash; the weight plays the nearest learned note instead of the scale.
 - Settings of the current firmware are kept on update (layout migration), the map starts empty.
 
-## Proposal: precise weight message (done in the branch above)
+## Notes for the firmware team
 
-- Every time the filtered weight changes (it is already filtered: 4-sample moving average, ~11 Hz), send on USB MIDI cable 1:
-  `F0 14 0D 72 <w0> <w1> <w2> <w3> F7` — `measure_calculated_value` (raw − tare, counts, can be negative) as a signed
-  value in 4 × 7-bit groups, lowest first (offset by 2^27 to keep it unsigned).
-- Optional: a setting (id 17, default off) to turn it on, so DAWs that dislike SysEx are not affected.
-- Counts, not grams: the counts-per-gram factor differs per unit (±15 %), the host calibrates.
+- The weight message carries `raw − tare + MEASURE_TARE_MARGIN` (true weight in counts, signed, not limited by the
+  Sensitivity range), offset by 2^27, 4 × 7-bit groups, lowest first. Counts, not grams: the factor differs per unit (±15 %).
+- The stream is off by default (runtime setting 18), so DAWs that dislike SysEx are not affected.
+- Objects under ~4.5 g are taken into the tare by the drift compensation (`MEASURE_TARE_ADAPT_THRESHOLD`).
 - Also worth fixing: `DELTA_QUARTER_KILO` / `DELTA_HALF_KILO` assume 700 counts/g; with 776.8 the ranges are ~10 % smaller than their names.
+- PLSDK got `plsdk_settings_mark_changed()` to save data that is not a registered setting (the 16 points don't fit a VALUE message).
 
-Nothing is changed in the firmware repo yet: changes go to the firmware team (Mark, soya-mik) as a branch + PR.
+The branch goes to the firmware team (Mark, soya-mik) as a PR; it is not pushed yet.
