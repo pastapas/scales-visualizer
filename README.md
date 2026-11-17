@@ -46,10 +46,11 @@ stores the weight of the object for that note (up to 16 objects, saved on the de
 the note of the nearest learned object in Hold, Arpeggio and BPM modes, also without the computer. Zones are split halfway
 between learned weights. The next note is preselected one step up the major scale.
 
-**Press to bend**: once a note sounds, pressing on the object with a finger bends the note with pitch bend instead of
-changing it (harder = higher); the live shape squashes as you press. The panel has two sliders, sent to the device
+**Press to bend**: once a note sounds, pressing on the object with a finger bends the note with pitch bend while the
+weight moves (harder = higher); the live shape squashes as you press. When the weight is steady again (an object added,
+or a press held still) the note is chosen again for the new weight. The panel has two sliders, sent to the device
 (not saved there, reset on reboot): *wait before a note* (settle time, default 150 ms) and *press for full bend*
-(default 100 g; off = 0).
+(default 300 g; off = 0).
 
 With this firmware the page also turns on the weight stream, so grams are precise (0.1 g) on every Sensitivity, and the
 shape size follows the real weight: against the heaviest learned object × 1.4 with the note map on, else the Sensitivity range.

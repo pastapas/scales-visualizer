@@ -40,8 +40,8 @@ Built file: `firmware/scales-weight-notes.uf2` (version 0.0.0, pico-sdk 2.3.1). 
   flash; the weight plays the nearest learned note instead of the scale. A new note plays only after the raw sensor samples are steady
   for 150 ms (setting 19, ~0.2–0.3 s after the object stops), so putting an object on or taking it off does not play
   the notes in between.
-- **Press to bend**: while a note sounds, a weight within the bend range (setting 20, ~100 g) of the note's weight bends it
-  with pitch bend instead of changing the note; the bend glides between sensor samples.
+- **Press to bend**: while a note sounds and the weight moves, a weight within the bend range (setting 20, ~300 g) of the
+  note's weight bends it with pitch bend; a steady weight picks the note again. The bend glides between sensor samples.
 - Settings of the current firmware are kept on update (layout migration), the map starts empty.
 
 ## Notes for the firmware team
