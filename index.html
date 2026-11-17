@@ -203,9 +203,9 @@ let blendScreen = false;
 let T = 0;
 
 // Point of view: the shapes stay where they are in space (and the lights stay in the room); the camera walks
-// around them. Every unmute it slowly (10 s) goes round to a new random side and stays there until the next unmute.
+// around them. Every MUTE it slowly (10 s) goes round to a new random side and stays there until the next MUTE.
 // The saved shapes have depth (z), so from the side they stand behind and in front of each other.
-// Each unmute also steps back a little (x1.15, up to x2.5), so the shapes that keep coming don't fill the screen;
+// Each MUTE also steps back a little (x1.15, up to x2.5), so the shapes that keep coming don't fill the screen;
 // when no saved shape is left the camera comes back close.
 const view = { yaw: 0, pitch: 0, dist: 1, fromYaw: 0, fromPitch: 0, fromDist: 1, toYaw: 0, toPitch: 0, toDist: 1, t0: 0, dur: 10000, turning: false, lastTurn: -1e9 };
 function turnView() {
@@ -365,7 +365,6 @@ function seqNoteOn(note) {
   const kind = st.mode === 'hold' ? 'hold' : 'arp';
   let s = shapes.find(x => x.note === note && x.kind === kind && x.talpha > 0);
   if (s) {
-    if (s.offAt) turnView();   // a dimmed stuck note sounds again: unmute
     if (s.lastTrig) s.interval = (performance.now() - s.lastTrig) / 1000;
     s.talpha = 1; s.offAt = 0;   // back after MUTE
   } else if (kind === 'arp' && live && live.note === note) {
@@ -418,8 +417,6 @@ function noteOn(note, ch) {
   bells.noteOn(note);
   if (isWeightNote(note)) sensorNoteOn(note);
   else {
-    // the arpeggio comes back after a pause (MUTE in arp mode)
-    if (st.mode !== 'hold' && st.arpLast && msgTime - st.arpLast > Math.max(1500, 2.5 * st.arpPeriod)) turnView();
     if (st.mode !== 'hold') arpStepSeen();
     seqNoteOn(note);
   }
@@ -432,7 +429,9 @@ function noteOff(note) {
   if (note === st.sensorNote) { st.sensorNote = -1; st.sensorOffAt = msgTime; return; }
   // a stuck note went off: MUTE (comes back on unmute) or TARE (gone for good).
   // Dim the shape in place; it lights up again if the note comes back, otherwise fades out
-  for (const s of shapes) if (s.note === note && s.kind === 'hold' && s.talpha > 0) { s.talpha = 0.22; s.offAt = performance.now(); }
+  let dimmed = false;
+  for (const s of shapes) if (s.note === note && s.kind === 'hold' && s.talpha > 0) { s.talpha = 0.22; s.offAt = performance.now(); dimmed = true; }
+  if (dimmed) turnView();   // MUTE pressed: walk round and step back (all notes go off at once: one turn)
 }
 
 function cc(num, val) {
@@ -452,6 +451,14 @@ function weightGone() {
   else killShape(live, 2.5);
   live = null;
 }
+
+// Arpeggio: MUTE stops the steps. When the steps stop while arp shapes are on screen, walk round once
+setInterval(() => {
+  if (st.mode === 'hold' || !st.arpLast || !st.arpPeriod) return;
+  const quiet = performance.now() - st.arpLast > Math.max(700, 1.8 * st.arpPeriod);
+  if (quiet && !st.arpPaused && shapes.some(x => x.kind === 'arp' && x.talpha > 0)) { st.arpPaused = true; turnView(); }
+  if (!quiet) st.arpPaused = false;
+}, 100);
 
 function allOff() { for (const s of shapes) killShape(s, 2); live = null; st.sensorNote = -1; }
 
