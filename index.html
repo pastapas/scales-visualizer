@@ -555,14 +555,11 @@ function onSysex(d) {
 }
 function askDevice() {
   if (!midi.access || !midi.sysex) return;
-  for (const o of midi.access.outputs.values()) {
-    if (!/scales/i.test(o.name)) continue;
-    // one request at a time: the device does not answer requests sent together
-    const q = [[0x61, 2, 8], [0x61, 3, 1], [0x61, 1, 16], [0x62, 4, 18, 1], [0x61, 5, 17], [0x76]];
-    q.forEach((m, i) => setTimeout(() => {
-      try { o.send([0xF0, 0x14, 0x0D, ...m, 0xF7]); } catch (e) {}
-    }, 300 + i * 250));   // CC number, sensitivity, play mode, weight stream on, note map on, note map points
-  }
+  if (![...midi.access.outputs.values()].some(o => /scales/i.test(o.name))) return;
+  // CC number, sensitivity, play mode, weight stream on, note map on, note map points
+  setTimeout(() => {
+    for (const m of [[0x61, 2, 8], [0x61, 3, 1], [0x61, 1, 16], [0x62, 4, 18, 1], [0x61, 5, 17], [0x76]]) sendScales(m);
+  }, 300);
 }
 function bindInputs() {
   if (!midi.access) return;
@@ -586,13 +583,8 @@ async function initMidi() {
   // the device does not report a play mode change made with its button: ask for it regularly
   setInterval(() => {
     if (!midi.sysex) return;
-    for (const o of midi.access.outputs.values()) {
-      if (/scales/i.test(o.name)) {
-        // play mode, and every 3rd time the sensitivity
-        try { o.send([0xF0, 0x14, 0x0D, 0x61, 0x01, (st.polls = (st.polls || 0) + 1) % 3 ? 16 : 1, 0xF7]); } catch (e) {}
-        break;
-      }
-    }
+    // play mode, and every 3rd time the sensitivity
+    if (!sxQueue.length) sendScales([0x61, 0x01, (st.polls = (st.polls || 0) + 1) % 3 ? 16 : 1]);
   }, 1500);
 }
 
@@ -667,12 +659,23 @@ addEventListener('pointermove', () => { hudActive = performance.now(); });
 const noteMap = { points: new Array(16).fill(null), on: false, supported: null, count: 0 };
 const nmEl = id => document.getElementById(id);
 const noteName = n => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
+// The device loses a SysEx that comes right after another one: send them one by one, with a pause
+const sxQueue = [];
+let sxBusy = false;
 function sendScales(bytes) {
   if (!midi.access) return false;
+  sxQueue.push(bytes);
+  pumpScales();
+  return true;
+}
+function pumpScales() {
+  if (sxBusy || !sxQueue.length) return;
+  const bytes = sxQueue.shift();
   for (const o of midi.access.outputs.values()) {
-    if (/scales/i.test(o.name)) { try { o.send([0xF0, 0x14, 0x0D, ...bytes, 0xF7]); return true; } catch (e) {} }
+    if (/scales/i.test(o.name) && o.state === 'connected') { try { o.send([0xF0, 0x14, 0x0D, ...bytes, 0xF7]); } catch (e) {} break; }
   }
-  return false;
+  sxBusy = true;
+  setTimeout(() => { sxBusy = false; pumpScales(); }, 160);
 }
 {
   const sel = nmEl('mapNote');
@@ -707,7 +710,7 @@ nmEl('mapLearn').addEventListener('click', () => {
   if (idx < 0) idx = noteMap.points.findIndex(p => !p);
   if (idx < 0) { alert('All 16 points are used: delete one first.'); return; }
   sendScales([0x74, idx, note]);
-  if (!noteMap.on) { sendScales([0x62, 7, 17, 1]); noteMap.on = true; }
+  if (!noteMap.on) { sendScales([0x62, 7, 17, 1]); sendScales([0x61, 7, 17]); }   // turn the map on, and check
   // next note up the major scale, for the next object
   const sel = nmEl('mapNote'); const MAJ = [0, 2, 4, 5, 7, 9, 11];
   let n = note + 1; while (!MAJ.includes(n % 12)) n++;
@@ -717,7 +720,7 @@ nmEl('mapTable').addEventListener('click', e => {
   const i = e.target.dataset && e.target.dataset.del;
   if (i !== undefined) sendScales([0x75, +i, 127, 0, 0, 0, 0]);
 });
-nmEl('mapOn').addEventListener('change', e => { noteMap.on = e.target.checked; sendScales([0x62, 8, 17, e.target.checked ? 1 : 0]); });
+nmEl('mapOn').addEventListener('change', e => { sendScales([0x62, 8, 17, e.target.checked ? 1 : 0]); sendScales([0x61, 8, 17]); });
 nmEl('mapClear').addEventListener('click', () => {
   if (!confirm('Delete all learned points on the device?')) return;
   noteMap.points.fill(null); sendScales([0x77]); renderMap();
