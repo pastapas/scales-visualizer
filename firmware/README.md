@@ -37,8 +37,9 @@ Built file: `firmware/scales-weight-notes.uf2` (version 0.0.0, pico-sdk 2.3.1). 
 
 - **Weight stream** (setting 18, not saved): `F0 14 0D 72 <w0..w3> F7` with the weight in sensor counts on every new sample.
 - **Note map** (setting 17 + SysEx 74 learn / 75 set / 76 get / 77 clear): up to 16 learned weight → note points, saved to
-  flash; the weight plays the nearest learned note instead of the scale. A new note plays only after the weight is steady
-  for 300 ms (setting 19), so putting an object on or taking it off does not play the notes in between.
+  flash; the weight plays the nearest learned note instead of the scale. A new note plays only after the raw sensor samples are steady
+  for 150 ms (setting 19, ~0.2–0.3 s after the object stops), so putting an object on or taking it off does not play
+  the notes in between.
 - Settings of the current firmware are kept on update (layout migration), the map starts empty.
 
 ## Notes for the firmware team
