@@ -22,7 +22,7 @@ Without a device: drag up/down on the screen to simulate weight.
 | M | Hold / Arpeggio (simulator) |
 | B | normal / screen blending |
 | G | grams readout on/off |
-| V | walk round to another side (as on MUTE) |
+| V | start / stop walking round (as MUTE / unmute) |
 | K | note map panel |
 | C | clear |
 | F | fullscreen |
@@ -33,10 +33,10 @@ Without a device: drag up/down on the screen to simulate weight.
 - **Live shape**: one shape in the center. Its size follows the weight (up and down) and it changes form with the note, until "+" saves it; a saved shape keeps its size.
 - **Hold**: a saved note is detected when the old weight note does not get its note-off (it was stuck with "+").
   MUTE dims the saved shapes in place; they light up again on unmute. After TARE they fade out.
-- **MUTE turns the view**: every MUTE (Hold: the stuck notes go off; Arpeggio: the steps stop)
-  the camera slowly (10 s) walks round the shapes to a new side; the shapes and the lights stay where they are
-  (saved shapes have depth, so from the side they stand behind each other). It stays there until the next MUTE.
-  Each MUTE also steps back a little (x1.15, up to x2.5); with no saved shapes left the camera comes back close.
+- **MUTE turns the view**: while MUTE is on (Hold: the stuck notes went off; Arpeggio: the steps stopped) the camera
+  slowly walks round the shapes (12°/s) and steps back (×1.57 per 10 s, up to ×4); the shapes and the lights stay where
+  they are (saved shapes have depth, so from the side they stand behind each other). Unmute stops the camera where it is.
+  With no saved shapes left the camera comes back close.
 - **Arpeggio**: arp steps are told apart from weight notes by timing. The firmware sends the weight note in the
   same millisecond as its CC and turns the old weight note off first; arp steps come on a fixed grid (Arp Rate × BPM),
   which the page learns. Saved arp notes stay in place, breathe and flash on each step.

@@ -203,30 +203,30 @@ let blendScreen = false;
 let T = 0;
 
 // Point of view: the shapes stay where they are in space (and the lights stay in the room); the camera walks
-// around them. Every MUTE it slowly (10 s) goes round to a new random side and stays there until the next MUTE.
+// around them and steps back, only while MUTE is on. Unmute stops it where it is (easing out in ~0.5 s).
 // The saved shapes have depth (z), so from the side they stand behind and in front of each other.
-// Each MUTE also steps back a little (x1.15, up to x2.5), so the shapes that keep coming don't fill the screen;
-// when no saved shape is left the camera comes back close.
-const view = { yaw: 0, pitch: 0, dist: 1, fromYaw: 0, fromPitch: 0, fromDist: 1, toYaw: 0, toPitch: 0, toDist: 1, t0: 0, dur: 10000, turning: false, lastTurn: -1e9 };
-function turnView() {
-  const now = performance.now();
-  if (now - view.lastTurn < 1500) return;   // all stuck notes come back at once: one turn
-  view.lastTurn = now;
-  // walk 60-150 degrees round, left or right; look a bit from above or from the level of the objects
-  const step = THREE.MathUtils.degToRad(60 + Math.random() * 90) * (Math.random() < 0.5 ? -1 : 1);
-  view.fromYaw = view.yaw; view.fromPitch = view.pitch; view.fromDist = view.dist;
-  view.toDist = Math.min(2.5, view.dist * 1.15);
-  view.toYaw = view.yaw + step; view.toPitch = THREE.MathUtils.degToRad(-15 + Math.random() * 50);
-  view.t0 = now; view.turning = true;
+// When no saved shape is left the camera comes back close.
+const VIEW_YAW_SPEED = THREE.MathUtils.degToRad(12);   // per second while muted: 10 s of mute = 120 degrees round
+const VIEW_ZOOM_RATE = 0.045;                           // per second while muted: 10 s = x1.57 further
+const VIEW_MAX_DIST = 4;
+const view = { yaw: 0, pitch: 0, dist: 1, dir: 1, toPitch: 0, moving: false, v: 0, last: 0 };
+function turnView() {   // MUTE: start walking
+  if (view.moving) return;   // all stuck notes go off at once: one start
+  view.moving = true;
+  view.dir = Math.random() < 0.5 ? -1 : 1;
+  view.toPitch = THREE.MathUtils.degToRad(-15 + Math.random() * 50);   // from the level of the objects to a bit above
 }
+function stopView() { view.moving = false; }   // unmute: stop where we are
 function updateView(now) {
-  if (view.turning) {
-    let k = Math.min(1, (now - view.t0) / view.dur);
-    if (k >= 1) view.turning = false;
-    k = k * k * (3 - 2 * k);   // slow start, slow end
-    view.yaw = view.fromYaw + (view.toYaw - view.fromYaw) * k;
-    view.pitch = view.fromPitch + (view.toPitch - view.fromPitch) * k;
-    view.dist = view.fromDist + (view.toDist - view.fromDist) * k;
+  const dt = view.last ? Math.min(0.05, (now - view.last) / 1000) : 0; view.last = now;
+  if (view.moving && !shapes.some(x => x !== live && x.talpha > 0)) view.moving = false;   // TARE: nothing left to walk round
+  // smooth start (~1.5 s) and smooth stop (~0.5 s)
+  view.v += ((view.moving ? 1 : 0) - view.v) * Math.min(1, dt * (view.moving ? 1.5 : 5));
+  if (view.v < 0.001) view.v = 0;
+  if (view.v) {
+    view.yaw += view.dir * VIEW_YAW_SPEED * view.v * dt;
+    view.pitch += (view.toPitch - view.pitch) * Math.min(1, dt * 0.3 * view.v);
+    view.dist = Math.min(VIEW_MAX_DIST, view.dist * (1 + VIEW_ZOOM_RATE * view.v * dt));
   } else if (view.dist > 1 && !shapes.some(x => x !== live && x.talpha > 0)) {
     view.dist = Math.max(1, view.dist - (view.dist - 1) * 0.02 - 0.0005);   // nothing saved: come back close
   }
@@ -366,6 +366,7 @@ function seqNoteOn(note) {
   let s = shapes.find(x => x.note === note && x.kind === kind && x.talpha > 0);
   if (s) {
     if (s.lastTrig) s.interval = (performance.now() - s.lastTrig) / 1000;
+    if (s.offAt) stopView();     // unmute: the camera stops
     s.talpha = 1; s.offAt = 0;   // back after MUTE
   } else if (kind === 'arp' && live && live.note === note) {
     // a new note in the arpeggio = the note on the scales when "+" was pressed: save the live shape
@@ -431,7 +432,7 @@ function noteOff(note) {
   // Dim the shape in place; it lights up again if the note comes back, otherwise fades out
   let dimmed = false;
   for (const s of shapes) if (s.note === note && s.kind === 'hold' && s.talpha > 0) { s.talpha = 0.22; s.offAt = performance.now(); dimmed = true; }
-  if (dimmed) turnView();   // MUTE pressed: walk round and step back (all notes go off at once: one turn)
+  if (dimmed) turnView();   // MUTE pressed: walk round and step back until unmute
 }
 
 function cc(num, val) {
@@ -457,7 +458,7 @@ setInterval(() => {
   if (st.mode === 'hold' || !st.arpLast || !st.arpPeriod) return;
   const quiet = performance.now() - st.arpLast > Math.max(700, 1.8 * st.arpPeriod);
   if (quiet && !st.arpPaused && shapes.some(x => x.kind === 'arp' && x.talpha > 0)) { st.arpPaused = true; turnView(); }
-  if (!quiet) st.arpPaused = false;
+  if (!quiet && st.arpPaused) { st.arpPaused = false; stopView(); }   // steps again: unmute
 }, 100);
 
 function allOff() { for (const s of shapes) killShape(s, 2); live = null; st.sensorNote = -1; }
@@ -494,7 +495,7 @@ function frame(now) {
     const wantShimmer = s.kind === 'hold' || s.kind === 'arp' ? 1 : 0;
     s.shimmer += (wantShimmer - s.shimmer) * Math.min(1, dt * 1.5);
     // a stuck note that did not come back after its note-off (TARE) fades away
-    if (s.kind === 'hold' && s.offAt && performance.now() - s.offAt > 6000) { s.offAt = 0; killShape(s, 1); }
+    if (s.kind === 'hold' && s.offAt && performance.now() - s.offAt > 20000) { s.offAt = 0; killShape(s, 1); }
     // arpeggio notes that stopped coming (arp cleared with TARE) fade away
     if (s.kind === 'arp' && s.talpha > 0) {
       const timeout = s.interval ? Math.max(4, s.interval * 3) : 10;
@@ -735,7 +736,7 @@ addEventListener('keydown', e => {
   else if (k === 'g') gramsHidden = !gramsHidden;
   else if (k === 'k') toggleMap();
   else if (k === 'c') allOff();
-  else if (k === 'v') { view.lastTurn = -1e9; turnView(); }
+  else if (k === 'v') view.moving ? stopView() : turnView();
   else if (k === 'f') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
 });
 addEventListener('pointermove', () => { hudActive = performance.now(); });
@@ -860,7 +861,7 @@ document.getElementById('start').addEventListener('click', e => {
   bells.init(); if (bells.ac.state === 'suspended') bells.ac.resume();
   initMidi();
 });
-window.app = { sim, setMode, frame, bells, st, shapes, midiLog, midi, onMidi, grams, noteMap, view, turnView, getLive: () => live };   // for debugging in the console
+window.app = { sim, setMode, frame, bells, st, shapes, midiLog, midi, onMidi, grams, noteMap, view, turnView, stopView, getLive: () => live };   // for debugging in the console
 requestAnimationFrame(frame);
 </script>
 </body>
