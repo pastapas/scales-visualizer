@@ -36,7 +36,8 @@ Without a device: drag up/down on the screen to simulate weight.
   same millisecond as its CC and turns the old weight note off first; arp steps come on a fixed grid (Arp Rate × BPM),
   which the page learns. Saved arp notes stay in place, breathe and flash on each step.
 - **Play mode** is polled every 1.5 s (`F0 14 0D 61 <req> 16 F7`): the device does not report a mode change made with its button.
-- **Colors** go by save order: red, orange, yellow, green, blue, purple, dark (like the photo stack). **Form** goes by note
+- **Colors** are random from the resin palette (red, orange, yellow, green, blue, purple, dark), new for every shape and
+  every new note, never the same twice in a row. **Form** goes by note
   (10 objects from `models/Scales Objects.stl`).
 
 ## Note map (needs the firmware from `firmware/`)

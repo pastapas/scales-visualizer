@@ -201,15 +201,22 @@ let live = null;        // shape of the note played from the weight right now
 let blendScreen = false;
 let T = 0;
 
-let colorIdx = 0;   // color of the next saved shape
-const nextColor = () => PALETTE[colorIdx % PALETTE.length].slice();
+// Every new shape (and every new note of the live shape) gets a random color, never the same as the last one
+let lastColorIdx = -1;
+function nextColor() {
+  let i;
+  do { i = Math.floor(Math.random() * PALETTE.length); } while (i === lastColorIdx);
+  lastColorIdx = i;
+  return PALETTE[i].slice();
+}
 
 function makeShape(note, x, y, size) {
   const mat = makeMaterial();
   const mesh = new THREE.Mesh(GEOMS[PC_OBJECT[note % 12]], mat);
   const group = new THREE.Group(); group.add(mesh); scene.add(group);
+  const c = nextColor();
   return {
-    note, mesh, group, mat, color: nextColor(), tcolor: nextColor(),
+    note, mesh, group, mat, color: c.slice(), tcolor: c, colorAt: performance.now(),
     x, y, tx: x, ty: y, size, tsize: size, alpha: 0, talpha: 1, hist: [],
     rot: Math.random() * Math.PI * 2, rotSpeed: (Math.random() - .5) * 0.12,
     kind: 'live', pulse: 0, phase: Math.random() * 10, lastTrig: performance.now(), interval: 0, shimmer: 0,
@@ -287,10 +294,6 @@ function fixShape(s, kind) {
   for (const [t, v] of s.hist) if (now - t < 700) size = Math.max(size, v);
   s.tsize = Math.max(m * 0.05, size);
   // nothing else saved on screen: start the rainbow again from red
-  if (!shapes.some(x => x !== s && x.kind !== 'live' && x.talpha > 0)) colorIdx = 0;
-  s.tcolor = nextColor();
-  colorIdx++;
-  if (live && live !== s) live.tcolor = nextColor();   // the live shape already shows the next color
   s.rotSpeed *= 0.5;
 }
 
@@ -305,6 +308,10 @@ function spawnLive(note) {
 
 function morph(s, note) {
   s.note = note; s.mesh.geometry = GEOMS[PC_OBJECT[note % 12]];
+  // a new note gets a new color; not more often than every 0.6 s, so sweeping the weight through
+  // the scale does not flash
+  const now = performance.now();
+  if (now - s.colorAt > 600) { s.tcolor = nextColor(); s.colorAt = now; }
 }
 
 function sensorNoteOn(note) {
