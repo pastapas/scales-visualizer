@@ -14,24 +14,24 @@
   }
   #hud b { color: rgba(255,255,255,.9); font-weight: 600; }
   #grams {
-    position: fixed; left: 0; right: 0; top: 4vh; text-align: center; pointer-events: none;
-    color: #fff; font: 200 clamp(56px, 11vw, 160px)/1 "Helvetica Neue", Helvetica, Arial, sans-serif;
-    letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
-    text-shadow: 0 0 24px rgba(0,0,0,.55), 0 0 2px rgba(0,0,0,.6); transition: opacity .5s;
+    position: fixed; right: 16px; bottom: 12px; text-align: right; pointer-events: none;
+    color: #fff; font: 300 clamp(18px, 2.4vw, 30px)/1 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+    text-shadow: 0 0 12px rgba(0,0,0,.6); transition: opacity .5s;
   }
-  #grams small { font-size: .32em; font-weight: 300; letter-spacing: 0; margin-left: .15em; opacity: .7; }
+  #grams small { font-size: .5em; margin-left: .25em; opacity: .7; }
   #start {
     position: fixed; inset: 0; display: grid; place-items: center; color: #fff;
     font: 15px/1.5 ui-monospace, Menlo, monospace; background: rgba(0,0,0,.6); cursor: pointer; text-align: center;
   }
   #start span { opacity: .55; font-size: 12px; }
   #mapBtn {
-    position: fixed; right: 16px; bottom: 14px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+    position: fixed; right: 16px; top: 14px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
     font: 12px ui-monospace, Menlo, monospace; color: rgba(255,255,255,.8); background: rgba(255,255,255,.08);
     border: 1px solid rgba(255,255,255,.18); transition: opacity .6s;
   }
   #map {
-    position: fixed; right: 16px; top: 16px; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 80px);
+    position: fixed; right: 16px; top: 52px; width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 110px);
     overflow: auto; display: none; padding: 14px 16px; border-radius: 10px; color: #fff; box-sizing: border-box;
     background: rgba(18,18,22,.88); border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(8px);
     font: 12px/1.5 ui-monospace, Menlo, monospace;
@@ -795,10 +795,12 @@ function updateHud(now) {
   // there is weight (a note sounds) but less than one CC step: show the bound instead of 0
   const below = !precise() && st.cc === 0 && st.sensorNote >= 0;
   const over = st.cc >= 127;
-  const txt = below ? '&lt;' + Math.ceil(gramsStep() + CFG.tareMarginCounts / CFG.countsPerGram) + '<small>g</small>'
-    : (over && !precise() ? '&gt;' : '') + (precise() && gramsShown < 100 ? gramsShown.toFixed(1) : Math.round(gramsShown)) + '<small>g</small>';
+  // milligrams, whole numbers, grouped by thousands with a thin space: 47 230 mg
+  const mg = v => Math.max(0, Math.round(v * 1000)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u2009') + '<small>mg</small>';
+  const txt = below ? '&lt;' + mg(Math.ceil(gramsStep() + CFG.tareMarginCounts / CFG.countsPerGram))
+    : (over && !precise() ? '&gt;' : '') + (precise() ? '' : '≈') + mg(gramsShown);
   if (txt !== gramsEl.dataset.v) { gramsEl.innerHTML = txt; gramsEl.dataset.v = txt; }
-  gramsEl.style.opacity = gramsHidden ? 0 : (g > 0 || below ? 0.92 : 0.25);
+  gramsEl.style.opacity = gramsHidden ? 0 : (g > 0 || below ? 0.6 : 0.2);
 }
 
 // ---------------------------------------------------------------- start
