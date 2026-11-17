@@ -36,6 +36,7 @@ Without a device: drag up/down on the screen to simulate weight.
 - **Unmute turns the view**: every unmute (Hold: stuck notes sound again; Arpeggio: the arp comes back after a pause)
   the camera slowly (10 s) walks round the shapes to a new side; the shapes and the lights stay where they are
   (saved shapes have depth, so from the side they stand behind each other). It stays there until the next unmute.
+  Each unmute also steps back a little (x1.15, up to x2.5); with no saved shapes left the camera comes back close.
 - **Arpeggio**: arp steps are told apart from weight notes by timing. The firmware sends the weight note in the
   same millisecond as its CC and turns the old weight note off first; arp steps come on a fixed grid (Arp Rate × BPM),
   which the page learns. Saved arp notes stay in place, breathe and flash on each step.

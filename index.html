@@ -205,14 +205,17 @@ let T = 0;
 // Point of view: the shapes stay where they are in space (and the lights stay in the room); the camera walks
 // around them. Every unmute it slowly (10 s) goes round to a new random side and stays there until the next unmute.
 // The saved shapes have depth (z), so from the side they stand behind and in front of each other.
-const view = { yaw: 0, pitch: 0, fromYaw: 0, fromPitch: 0, toYaw: 0, toPitch: 0, t0: 0, dur: 10000, turning: false, lastTurn: -1e9 };
+// Each unmute also steps back a little (x1.15, up to x2.5), so the shapes that keep coming don't fill the screen;
+// when no saved shape is left the camera comes back close.
+const view = { yaw: 0, pitch: 0, dist: 1, fromYaw: 0, fromPitch: 0, fromDist: 1, toYaw: 0, toPitch: 0, toDist: 1, t0: 0, dur: 10000, turning: false, lastTurn: -1e9 };
 function turnView() {
   const now = performance.now();
   if (now - view.lastTurn < 1500) return;   // all stuck notes come back at once: one turn
   view.lastTurn = now;
   // walk 60-150 degrees round, left or right; look a bit from above or from the level of the objects
   const step = THREE.MathUtils.degToRad(60 + Math.random() * 90) * (Math.random() < 0.5 ? -1 : 1);
-  view.fromYaw = view.yaw; view.fromPitch = view.pitch;
+  view.fromYaw = view.yaw; view.fromPitch = view.pitch; view.fromDist = view.dist;
+  view.toDist = Math.min(2.5, view.dist * 1.15);
   view.toYaw = view.yaw + step; view.toPitch = THREE.MathUtils.degToRad(-15 + Math.random() * 50);
   view.t0 = now; view.turning = true;
 }
@@ -223,9 +226,12 @@ function updateView(now) {
     k = k * k * (3 - 2 * k);   // slow start, slow end
     view.yaw = view.fromYaw + (view.toYaw - view.fromYaw) * k;
     view.pitch = view.fromPitch + (view.toPitch - view.fromPitch) * k;
+    view.dist = view.fromDist + (view.toDist - view.fromDist) * k;
+  } else if (view.dist > 1 && !shapes.some(x => x !== live && x.talpha > 0)) {
+    view.dist = Math.max(1, view.dist - (view.dist - 1) * 0.02 - 0.0005);   // nothing saved: come back close
   }
-  const c = Math.cos(view.pitch);
-  camera.position.set(CAM_DIST * c * Math.sin(view.yaw), CAM_DIST * Math.sin(view.pitch), CAM_DIST * c * Math.cos(view.yaw));
+  const c = Math.cos(view.pitch), d = CAM_DIST * view.dist;
+  camera.position.set(d * c * Math.sin(view.yaw), d * Math.sin(view.pitch), d * c * Math.cos(view.yaw));
   camera.lookAt(0, 0, 0);
 }
 
