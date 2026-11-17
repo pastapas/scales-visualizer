@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scales Visualizer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #hud {
+    position: fixed; left: 16px; bottom: 14px; color: rgba(255,255,255,.55);
+    font: 12px/1.6 ui-monospace, Menlo, monospace; pointer-events: none; transition: opacity .6s;
+    text-shadow: 0 0 4px #000;
+  }
+  #hud b { color: rgba(255,255,255,.9); font-weight: 600; }
+  #grams {
+    position: fixed; left: 0; right: 0; top: 4vh; text-align: center; pointer-events: none;
+    color: #fff; font: 200 clamp(56px, 11vw, 160px)/1 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 24px rgba(0,0,0,.55), 0 0 2px rgba(0,0,0,.6); transition: opacity .5s;
+  }
+  #grams small { font-size: .32em; font-weight: 300; letter-spacing: 0; margin-left: .15em; opacity: .7; }
+  #start {
+    position: fixed; inset: 0; display: grid; place-items: center; color: #fff;
+    font: 15px/1.5 ui-monospace, Menlo, monospace; background: rgba(0,0,0,.6); cursor: pointer; text-align: center;
+  }
+  #start span { opacity: .55; font-size: 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="grams"></div>
+<div id="hud"></div>
+<div id="start">click to start<br><span>connect Scales via USB · or drag up/down on screen to simulate weight</span></div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ---------------------------------------------------------------- config
+const CFG = {
+  ccNum: 90,            // Scales "Music CC" (weight), default 90
+  baseAlpha: 0.85,      // transparency of every shape
+  sensorWindowMs: 8,    // note-on within this time after a CC = note from the weight (firmware sends them in the same loop)
+  stuckCheckMs: 400,    // hold: CC at 0 this long and note still on = stuck note
+  // weight calibration, measured 2026-11-17 on Sasha's Scales with 10/50/100/200 g weights:
+  // raw sensor counts per gram (linear within 0.02 g). Another unit may differ by a few %.
+  countsPerGram: 776.8,
+  tareMarginCounts: 500,  // MEASURE_TARE_MARGIN in the firmware
+};
+const MODES = ['hold', 'arp', 'pitch', 'sens', 'bpm'];   // Scales play_mode ids 0..4
+
+// ---------------------------------------------------------------- palette & 3D objects (from "Scales Objects.stl")
+// colors go by the order shapes are saved, like the stack on the photo: red, orange, yellow, green, blue, purple, dark
+const PALETTE = [[230, 18, 32], [255, 118, 0], [255, 196, 0], [0, 150, 48], [0, 120, 235], [100, 24, 190], [48, 30, 80]];
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// pitch class -> object in objects.json:
+// 0 dome, 1 square frustum, 2 tall block, 3 faceted gem, 4 round cone, 5 octagonal prism,
+// 6 rounded dome, 7 hexagonal frustum, 8 chamfered octagon, 9 bowl
+const PC_OBJECT = [8, 1, 0, 4, 3, 7, 2, 5, 1, 6, 4, 9];
+const HEIGHT_BOOST = 1.25;   // a bit taller than in the file = more volume
+const TILT = 0.6;            // rad: how much of the top face we see
+
+const cv = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setClearColor(0x000000, 1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;   // keeps the colors as saturated as the resin
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 10, 50000);
+camera.position.set(0, 0, 4000);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x101018, 0.9));
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.0); keyLight.position.set(-0.7, 1, 0.9); scene.add(keyLight);
+const rimLight = new THREE.DirectionalLight(0xffffff, 0.6); rimLight.position.set(0.9, -0.2, -0.7); scene.add(rimLight);
+
+let W = 0, H = 0, PX = 1;   // PX = world units per CSS pixel at z = 0
+function resize() {
+  W = innerWidth; H = innerHeight;
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(W, H, false);
+  camera.aspect = W / H; camera.updateProjectionMatrix();
+  PX = 2 * camera.position.z * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / H;
+}
+addEventListener('resize', resize); resize();
+const minDim = () => Math.min(W, H);
+
+// meshes: radius of every object = 1, centered
+const GEOMS = [];
+{
+  const data = await (await fetch('objects.json')).json();
+  for (const o of data.objects) {
+    let g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(o.pos, 3));
+    g.setIndex(o.idx);
+    g.computeBoundingBox();
+    const b = g.boundingBox, r = Math.max(b.max.x - b.min.x, b.max.z - b.min.z) / 2;
+    g.translate(-(b.min.x + b.max.x) / 2, -(b.min.y + b.max.y) / 2, -(b.min.z + b.max.z) / 2);
+    g.scale(1 / r, HEIGHT_BOOST / r, 1 / r);
+    g = toCreasedNormals(g, 0.6);   // sharp facets, smooth domes
+    GEOMS[o.id] = g;
+  }
+}
+
+function makeMaterial() {
+  const m = new THREE.MeshStandardMaterial({
+    roughness: 0.55, metalness: 0, transparent: true, opacity: CFG.baseAlpha, depthWrite: false, envMapIntensity: 0.25,
+  });
+  const u = m.userData.u = { uTime: { value: 0 }, uShimmer: { value: 0 }, uPulse: { value: 0 }, uSeed: { value: Math.random() * 10 } };
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vObjPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObjPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vObjPos;\nuniform float uTime, uShimmer, uPulse, uSeed;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      {
+        // glitter in the resin
+        float h = fract(sin(dot(floor(vObjPos * 160.0), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+        totalEmissiveRadiance += vec3(step(0.993, h)) * 0.3;
+        // a bit of the own color in the shadows, like light inside the resin
+        totalEmissiveRadiance += diffuseColor.rgb * 0.22;
+        // slow light band moving over a saved shape
+        float a = uTime * 0.35 + uSeed;
+        float band = dot(vObjPos, normalize(vec3(cos(a), 0.7, sin(a))));
+        float p = sin(uTime * 0.9 + uSeed) * 1.3;
+        totalEmissiveRadiance += diffuseColor.rgb * exp(-pow((band - p) * 2.5, 2.0)) * 0.6 * uShimmer;
+        // soft flash on an arpeggio step
+        totalEmissiveRadiance += diffuseColor.rgb * 0.3 * uPulse;   // glow in its own color, no white
+      }`);
+  };
+  return m;
+}
+function setBlend(m, screen) {
+  if (screen) {
+    m.blending = THREE.CustomBlending; m.blendEquation = THREE.AddEquation;
+    m.blendSrc = THREE.SrcAlphaFactor; m.blendDst = THREE.OneMinusSrcColorFactor;
+  } else m.blending = THREE.NormalBlending;
+}
+
+// ---------------------------------------------------------------- shapes
+const shapes = [];
+let live = null;        // shape of the note played from the weight right now
+let blendScreen = false;
+let T = 0;
+
+let colorIdx = 0;   // color of the next saved shape
+const nextColor = () => PALETTE[colorIdx % PALETTE.length].slice();
+
+function makeShape(note, x, y, size) {
+  const mat = makeMaterial();
+  const mesh = new THREE.Mesh(GEOMS[PC_OBJECT[note % 12]], mat);
+  const group = new THREE.Group(); group.add(mesh); scene.add(group);
+  return {
+    note, mesh, group, mat, color: nextColor(), tcolor: nextColor(),
+    x, y, tx: x, ty: y, size, tsize: size, alpha: 0, talpha: 1, hist: [],
+    rot: Math.random() * Math.PI * 2, rotSpeed: (Math.random() - .5) * 0.12,
+    kind: 'live', pulse: 0, phase: Math.random() * 10, lastTrig: performance.now(), interval: 0, shimmer: 0,
+  };
+}
+
+function removeShape(s) { scene.remove(s.group); s.mat.dispose(); }
+
+function placeShape(s, t, order) {
+  let R = s.size;
+  if (s.kind === 'arp') R *= 1 + 0.03 * (1 + Math.sin(t * 2.2 + s.phase)) + 0.08 * s.pulse;   // breathing, never below its size
+  if (s.kind === 'hold') R *= 1 + 0.008 * (1 + Math.sin(t * 1.3 + s.phase));
+  const g = s.group;
+  g.visible = R > 0.5 && s.alpha > 0.005;
+  g.position.set((s.x - W / 2) * PX, -(s.y - H / 2) * PX, 0);
+  g.scale.setScalar(Math.max(0.001, R * PX));
+  g.rotation.set(TILT + 0.06 * Math.sin(t * 0.5 + s.phase), 0, 0.05 * Math.sin(t * 0.37 + s.phase));
+  s.mesh.rotation.y = s.rot;
+  s.mesh.renderOrder = order;
+  const m = s.mat;
+  m.color.setRGB(s.color[0] / 255, s.color[1] / 255, s.color[2] / 255, THREE.SRGBColorSpace);
+  m.opacity = s.alpha * CFG.baseAlpha;
+  m.userData.u.uTime.value = t; m.userData.u.uShimmer.value = s.shimmer; m.userData.u.uPulse.value = s.pulse;
+  if (m.userData.screen !== blendScreen) { setBlend(m, blendScreen); m.userData.screen = blendScreen; m.needsUpdate = true; }
+}
+
+// ---------------------------------------------------------------- state from MIDI
+const st = {
+  cc: 0, lastCC: -1e9, sensorNote: -1, sensorOffAt: -1e9, arpLast: 0, arpPeriod: 0, bend: 0,
+  mode: 'hold', modeSrc: 'manual', lastNote: -1, sens: 4,
+};
+// weight in grams from the CC: the firmware maps the Sensitivity range (in sensor counts) to CC 0..127
+const SENS_RANGE_COUNTS = [175000, 350000, 700000, 1050000, 1400000];
+function grams() {
+  if (st.cc <= 0) return 0;
+  const step = Math.floor(SENS_RANGE_COUNTS[st.sens] / 127);
+  return ((st.cc + 0.5) * step + CFG.tareMarginCounts) / CFG.countsPerGram;
+}
+const gramsStep = () => Math.floor(SENS_RANGE_COUNTS[st.sens] / 127) / CFG.countsPerGram;
+
+const liveSize = () => {
+  const v = st.cc / 127;
+  return minDim() * 0.035 + Math.pow(v, 1.5) * Math.hypot(W, H) * 0.8;   // 127 = bigger than the screen
+};
+
+function pickSpot() {
+  const m = minDim(); let best = null, bestD = -1;
+  const fixed = shapes.filter(s => s.kind !== 'live' && s.talpha > 0);
+  for (let i = 0; i < 24; i++) {
+    const a = Math.random() * Math.PI * 2, d = m * (0.13 + 0.2 * Math.random());
+    const x = W / 2 + Math.cos(a) * d * 1.3, y = H / 2 + Math.sin(a) * d * 0.9;
+    let nd = Infinity; for (const s of fixed) nd = Math.min(nd, Math.hypot(s.tx - x, s.ty - y));
+    if (nd > bestD) { bestD = nd; best = [x, y]; }
+  }
+  return best;
+}
+
+// a saved shape keeps the size it reached (it never shrinks)
+function fixShape(s, kind) {
+  const [x, y] = pickSpot(), m = minDim();
+  s.kind = kind; s.tx = x; s.ty = y;
+  s.tsize = Math.max(m * 0.05, s.tsize, s.size);
+  // nothing else saved on screen: start the rainbow again from red
+  if (!shapes.some(x => x !== s && x.kind !== 'live' && x.talpha > 0)) colorIdx = 0;
+  s.tcolor = nextColor();
+  colorIdx++;
+  if (live && live !== s) live.tcolor = nextColor();   // the live shape already shows the next color
+  s.rotSpeed *= 0.5;
+}
+
+function killShape(s, speed = 1) { s.talpha = 0; s.fade = speed; }
+
+// One live shape in the center. It grows with the weight (never shrinks) and takes the color/form
+// of the current note, until "+" saves it. Then a new live shape starts.
+function spawnLive(note) {
+  const s = makeShape(note, W / 2, H / 2, liveSize() * 0.6);
+  s.tsize = liveSize(); shapes.push(s); live = s;
+}
+
+function morph(s, note) {
+  s.note = note; s.mesh.geometry = GEOMS[PC_OBJECT[note % 12]];
+}
+
+function sensorNoteOn(note) {
+  const prev = st.sensorNote;
+  // hold: the previous note never got its note-off -> it was stuck with "+": save the shape, start a new one
+  if (st.mode === 'hold' && live && prev >= 0 && prev !== note) { fixShape(live, 'hold'); live = null; }
+  st.sensorNote = note;
+  if (live) { live.talpha = 1; if (live.note !== note) morph(live, note); }
+  else spawnLive(note);
+}
+
+const arpShape = note => shapes.find(x => x.note === note && x.kind === 'arp' && x.talpha > 0);
+
+function seqNoteOn(note) {
+  // a note that did not come from moving the weight: arpeggio / BPM step, or a stuck note sounding again
+  const kind = st.mode === 'hold' ? 'hold' : 'arp';
+  let s = shapes.find(x => x.note === note && x.kind === kind && x.talpha > 0);
+  if (s) {
+    if (s.lastTrig) s.interval = (performance.now() - s.lastTrig) / 1000;
+    s.talpha = 1; s.offAt = 0;   // back after MUTE
+  } else if (kind === 'arp' && live && live.note === note) {
+    // a new note in the arpeggio = the note on the scales when "+" was pressed: save the live shape
+    s = live; live = null; fixShape(s, 'arp');
+  } else {
+    s = makeShape(note, W / 2, H / 2, 1);
+    s.size = minDim() * 0.02; shapes.push(s); fixShape(s, kind); s.tsize = Math.max(minDim() * 0.11, liveSize());
+  }
+  s.lastTrig = performance.now(); s.pulse = 1;
+}
+
+// arpeggio steps come on a fixed time grid (Arp Rate x BPM); learn it from the steps we see
+function arpStepSeen() {
+  if (st.arpLast) {
+    const d = msgTime - st.arpLast;
+    if (d > 60 && d < 4000) {
+      if (!st.arpPeriod || Math.abs(d - st.arpPeriod) > st.arpPeriod * 0.2) st.arpPeriod = d;
+      else st.arpPeriod += (d - st.arpPeriod) * 0.3;
+    }
+    if (d < 20) return;   // same step (off + on)
+  }
+  st.arpLast = msgTime;
+}
+function onArpGrid() {
+  if (!st.arpPeriod || !st.arpLast || msgTime - st.arpLast > 8000) return false;
+  const ph = (msgTime - st.arpLast) % st.arpPeriod;
+  return ph < 15 || st.arpPeriod - ph < 15;
+}
+
+function isWeightNote(note) {
+  if (st.mode === 'pitch') return true;
+  const withCC = msgTime - st.lastCC < CFG.sensorWindowMs;
+  const replacesWeightNote = msgTime - st.sensorOffAt < CFG.sensorWindowMs;   // old weight note just went off
+  if (st.mode === 'hold') {
+    // the firmware never plays a stuck note from the weight: a note that has a saved shape is a stuck
+    // note sounding again (unmute / mode change), even when a CC came at the same moment
+    return !shapes.some(x => x.note === note && x.kind === 'hold' && x.talpha > 0);
+  }
+  // arpeggio / BPM
+  if (note === st.sensorNote) return false;            // the note held on the scales played again by the arp
+  const hasArp = !!arpShape(note), grid = onArpGrid();
+  if (hasArp && grid) return false;                    // a known arp note on the arp grid
+  if (withCC || replacesWeightNote) return true;       // came with the CC, or right after the old weight note went off
+  return !grid && !hasArp;                             // weight moved without a new CC value
+}
+
+function noteOn(note, ch) {
+  st.lastNote = note;
+  bells.noteOn(note);
+  if (isWeightNote(note)) sensorNoteOn(note);
+  else { if (st.mode !== 'hold') arpStepSeen(); seqNoteOn(note); }
+}
+
+function noteOff(note) {
+  bells.noteOff(note);
+  // the weight note going off does not remove the live shape: it changes form with the next note,
+  // and disappears only when the weight is taken off (CC 0)
+  if (note === st.sensorNote) { st.sensorNote = -1; st.sensorOffAt = msgTime; return; }
+  // a stuck note went off: MUTE (comes back on unmute) or TARE (gone for good).
+  // Dim the shape in place; it lights up again if the note comes back, otherwise fades out
+  for (const s of shapes) if (s.note === note && s.kind === 'hold' && s.talpha > 0) { s.talpha = 0.22; s.offAt = performance.now(); }
+}
+
+function cc(num, val) {
+  if (num !== CFG.ccNum) return;
+  st.cc = val; st.lastCC = msgTime;
+  clearTimeout(st.zeroTimer); st.zeroTimer = 0;
+  if (val === 0) st.zeroTimer = setTimeout(() => { st.zeroTimer = 0; weightGone(); }, CFG.stuckCheckMs);
+  // the live shape was saved with "+" while the weight is still on: a new one starts
+  if (!live && st.sensorNote >= 0 && val > 0) spawnLive(st.sensorNote);
+}
+
+// weight taken off (CC 0 for a moment)
+function weightGone() {
+  if (st.cc !== 0 || !live) return;
+  // hold: the note never got a note-off -> it was stuck with "+": save it
+  if (st.mode === 'hold' && st.sensorNote >= 0) { fixShape(live, 'hold'); st.sensorNote = -1; }
+  else killShape(live, 2.5);
+  live = null;
+}
+
+function allOff() { for (const s of shapes) killShape(s, 2); live = null; st.sensorNote = -1; }
+
+function setMode(m, src) {
+  if (m === st.mode) { st.modeSrc = src; return; }
+  if (sim.active) sim.reset();   // like the firmware: leaving a mode turns its notes off
+  st.mode = m; st.modeSrc = src;
+  for (const s of shapes) if (s.kind === 'arp') killShape(s, 1.5);
+}
+
+// ---------------------------------------------------------------- update / render loop
+let lastFrame = performance.now(), hudActive = performance.now(), hudHidden = false;
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastFrame) / 1000); lastFrame = now; T += dt;
+
+  if (live) live.tsize = Math.max(live.tsize, liveSize());   // grows, never shrinks
+
+  for (const s of shapes) {
+    const kp = s.kind === 'live' ? 12 : 3.2;
+    s.x += (s.tx - s.x) * Math.min(1, dt * kp);
+    s.y += (s.ty - s.y) * Math.min(1, dt * kp);
+    s.size += (s.tsize - s.size) * Math.min(1, dt * (s.kind === 'live' ? 10 : 3));
+    s.alpha += (s.talpha - s.alpha) * Math.min(1, dt * (s.talpha < s.alpha ? 3 * (s.fade || 1) : 8));
+    s.rot += dt * (s.kind === 'live' ? 0.12 : s.rotSpeed);
+    s.pulse *= Math.exp(-dt * 3.5);
+    for (let i = 0; i < 3; i++) s.color[i] += (s.tcolor[i] - s.color[i]) * Math.min(1, dt * 10);
+    const wantShimmer = s.kind === 'hold' || s.kind === 'arp' ? 1 : 0;
+    s.shimmer += (wantShimmer - s.shimmer) * Math.min(1, dt * 1.5);
+    // a stuck note that did not come back after its note-off (TARE) fades away
+    if (s.kind === 'hold' && s.offAt && performance.now() - s.offAt > 6000) { s.offAt = 0; killShape(s, 1); }
+    // arpeggio notes that stopped coming (arp cleared with TARE) fade away
+    if (s.kind === 'arp' && s.talpha > 0) {
+      const timeout = s.interval ? Math.max(4, s.interval * 3) : 10;
+      if ((performance.now() - s.lastTrig) / 1000 > timeout) killShape(s, 1);
+    }
+  }
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (s.talpha === 0 && s.alpha < 0.004) { removeShape(s); shapes.splice(i, 1); }
+  }
+
+  // saved shapes under, the live one on top; biggest first so small ones stay visible
+  const order = shapes.slice().sort((a, b) => (a === live) - (b === live) || b.size - a.size);
+  order.forEach((s, i) => placeShape(s, T, i));
+  renderer.render(scene, camera);
+
+  updateHud(now);
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- FM bells (DX7-style tubular bell)
+class Bells {
+  constructor() { this.ac = null; this.voices = []; }
+  init() {
+    if (this.ac) return;
+    const ac = this.ac = new (window.AudioContext || window.webkitAudioContext)();
+    this.out = ac.createGain(); this.out.gain.value = 0.55;
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.25;
+    this.dry = ac.createGain(); this.dry.gain.value = 0.85;
+    this.wet = ac.createGain(); this.wet.gain.value = 0.32;
+    const rev = ac.createConvolver(); rev.buffer = this.impulse(3.2);
+    this.bus = ac.createGain();
+    this.bus.connect(this.dry).connect(this.out);
+    this.bus.connect(rev).connect(this.wet).connect(this.out);
+    this.out.connect(comp).connect(ac.destination);
+  }
+  impulse(sec) {
+    const ac = this.ac, len = ac.sampleRate * sec, b = ac.createBuffer(2, len, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = b.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6) * Math.exp(-i / len * 2);
+    }
+    return b;
+  }
+  noteOn(note) {
+    if (!this.ac) return;
+    const ac = this.ac, t = ac.currentTime + 0.005;
+    const f = 440 * Math.pow(2, (note - 69) / 12);
+    const k = Math.min(1.6, Math.max(0.45, Math.pow(2, (60 - note) / 24)));   // low notes ring longer
+    const v = ac.createGain(); v.gain.value = 1; v.connect(this.bus);
+    // operator pairs: [carrier ratio, mod ratio, index peak, index tau, index floor, amp, amp tau, detune cents]
+    const pairs = [
+      [1, 3.5, 4.2, 0.55, 0.5, 0.20, 1.9 * k, 0],
+      [1, 1, 1.1, 0.4, 0.15, 0.11, 2.6 * k, 4],
+      [3.5, 7.07, 1.6, 0.12, 0.2, 0.05, 0.35 * k, -3],
+      [2, 13.1, 2.4, 0.05, 0, 0.03, 0.12, 0],   // strike
+    ];
+    const oscs = [];
+    let end = 0;
+    for (const [cr, mr, ip, it, ifl, amp, at, det] of pairs) {
+      const car = ac.createOscillator(), mod = ac.createOscillator(), mg = ac.createGain(), ag = ac.createGain();
+      car.frequency.value = f * cr; mod.frequency.value = f * mr;
+      car.detune.value = det + st.bend * 200; mod.detune.value = det + st.bend * 200;
+      const dev = f * mr;
+      mg.gain.setValueAtTime(ip * dev, t);
+      mg.gain.setTargetAtTime(ifl * dev, t, it);
+      ag.gain.setValueAtTime(0, t);
+      ag.gain.linearRampToValueAtTime(amp, t + 0.002);
+      ag.gain.setTargetAtTime(0, t + 0.002, at);
+      mod.connect(mg).connect(car.frequency);
+      car.connect(ag).connect(v);
+      car.start(t); mod.start(t);
+      end = Math.max(end, at * 6);
+      oscs.push(car, mod);
+    }
+    for (const o of oscs) o.stop(t + end);
+    const voice = { note, v, oscs, t };
+    oscs[0].onended = () => { v.disconnect(); this.voices = this.voices.filter(x => x !== voice); };
+    this.voices.push(voice);
+    while (this.voices.length > 32) { const o = this.voices.shift(); this.kill(o, 0.03); }
+  }
+  kill(voice, tau) {
+    const t = this.ac.currentTime;
+    voice.v.gain.cancelScheduledValues(t); voice.v.gain.setValueAtTime(voice.v.gain.value, t);
+    voice.v.gain.setTargetAtTime(0, t, tau);
+    for (const o of voice.oscs) { try { o.stop(t + tau * 8); } catch (e) {} }
+  }
+  noteOff(note) {
+    if (!this.ac) return;
+    // bells keep ringing a bit after the note-off
+    for (const vc of this.voices) if (vc.note === note && !vc.released) { vc.released = true; this.kill(vc, 0.5); }
+  }
+  bend() {
+    if (!this.ac) return;
+    for (const vc of this.voices) for (const o of vc.oscs) o.detune.setTargetAtTime(st.bend * 200, this.ac.currentTime, 0.01);
+  }
+}
+const bells = new Bells();
+
+// ---------------------------------------------------------------- MIDI (Web MIDI)
+const midi = { access: null, inputs: [], sysex: false, status: 'no MIDI' };
+const midiLog = [];   // last MIDI messages [time, bytes...], for debugging: app.midiLog
+let msgTime = 0;   // arrival time of the MIDI message being handled
+function onMidi(e) {
+  msgTime = e.timeStamp || performance.now();
+  // the weight was taken off a while ago and its timer has not fired yet (e.g. a busy tab): do it now
+  if (st.cc === 0 && st.zeroTimer && msgTime - st.lastCC > CFG.stuckCheckMs) { clearTimeout(st.zeroTimer); st.zeroTimer = 0; weightGone(); }
+  midiLog.push([Math.round(msgTime), ...e.data]); if (midiLog.length > 3000) midiLog.splice(0, 1000);
+  const d = e.data, s = d[0];
+  if (s === 0xF0) return onSysex(d);
+  const type = s & 0xF0, ch = s & 0x0F;
+  if (type === 0x90 && d[2] > 0) noteOn(d[1], ch);
+  else if (type === 0x80 || (type === 0x90 && d[2] === 0)) noteOff(d[1], ch);
+  else if (type === 0xB0) cc(d[1], d[2]);
+  else if (type === 0xE0) { st.bend = ((d[2] << 7 | d[1]) - 8192) / 8192; bells.bend(); }
+}
+function onSysex(d) {
+  // Scales settings protocol: VALUE F0 14 0D 68 req status id val F7, CHANGED F0 14 0D 69 id val F7
+  if (d[1] !== 0x14 || d[2] !== 0x0D) return;
+  let id, val;
+  if (d[3] === 0x68 && d[5] === 0) { id = d[6]; val = d[7]; }
+  else if (d[3] === 0x69) { id = d[4]; val = d[5]; }
+  else return;
+  if (id === 16 && MODES[val]) setMode(MODES[val], 'device');
+  if (id === 8) CFG.ccNum = val;
+  if (id === 1 && val <= 4) st.sens = val;
+}
+function askDevice() {
+  if (!midi.access || !midi.sysex) return;
+  for (const o of midi.access.outputs.values()) {
+    if (!/scales/i.test(o.name)) continue;
+    // one request at a time: the device does not answer requests sent together
+    [[2, 8], [3, 1], [1, 16]].forEach(([req, id], i) => setTimeout(() => {
+      try { o.send([0xF0, 0x14, 0x0D, 0x61, req, id, 0xF7]); } catch (e) {}
+    }, 300 + i * 250));   // music CC number, play mode
+  }
+}
+function bindInputs() {
+  if (!midi.access) return;
+  for (const i of midi.inputs) i.onmidimessage = null;
+  const all = [...midi.access.inputs.values()];
+  const scales = all.filter(i => /scales/i.test(i.name));
+  midi.inputs = scales.length ? scales : all;
+  for (const i of midi.inputs) i.onmidimessage = onMidi;
+  midi.status = midi.inputs.length ? midi.inputs.map(i => i.name).join(', ') : 'no device';
+  midi.isScales = scales.length > 0;
+  askDevice();
+}
+async function initMidi() {
+  if (!navigator.requestMIDIAccess) { midi.status = 'Web MIDI not supported (use Chrome)'; return; }
+  try { midi.access = await navigator.requestMIDIAccess({ sysex: true }); midi.sysex = true; }
+  catch (e) {
+    try { midi.access = await navigator.requestMIDIAccess(); } catch (e2) { midi.status = 'MIDI access denied'; return; }
+  }
+  midi.access.onstatechange = () => bindInputs();
+  bindInputs();
+  // the device does not report a play mode change made with its button: ask for it regularly
+  setInterval(() => {
+    if (!midi.sysex) return;
+    for (const o of midi.access.outputs.values()) {
+      if (/scales/i.test(o.name)) {
+        // play mode, and every 3rd time the sensitivity
+        try { o.send([0xF0, 0x14, 0x0D, 0x61, 0x01, (st.polls = (st.polls || 0) + 1) % 3 ? 16 : 1, 0xF7]); } catch (e) {}
+        break;
+      }
+    }
+  }, 1500);
+}
+
+// ---------------------------------------------------------------- simulator (behaves like the Scales firmware)
+const SCALE_MAJOR = [0, 2, 4, 5, 7, 9, 11];
+const SIM_NOTES = []; for (let n = 36; n <= 96; n++) if (SCALE_MAJOR.includes(n % 12)) SIM_NOTES.push(n);
+const send = (a, b, c) => onMidi({ data: [a, b, c] });
+const sim = {
+  active: false, w: 0, cc: -1, L: -1, stuck: new Set(), arp: [], idx: 0, arpNote: -1, timer: null,
+  setWeight(w) {
+    this.active = true;
+    this.w = Math.max(0, Math.min(1, w));
+    const c = Math.min(127, Math.floor(this.w * 127));
+    if (c !== this.cc) { this.cc = c; send(0xB0, CFG.ccNum, c); }
+    const note = this.w < 0.008 ? -1 : SIM_NOTES[Math.min(SIM_NOTES.length - 1, Math.floor(this.w * SIM_NOTES.length))];
+    if (note === this.L) return;
+    const hold = st.mode === 'hold';
+    if (this.L >= 0 && !(hold && this.stuck.has(this.L))) send(0x80, this.L, 0);
+    if (note >= 0 && !(hold && this.stuck.has(note))) send(0x90, note, 127);
+    this.L = note;
+  },
+  plus() {   // FUNCTION short press
+    this.active = true;
+    if (st.mode === 'hold' && this.L >= 0) this.stuck.add(this.L);
+    if (st.mode === 'arp') { this.arp.push(this.L); this.startArp(); }
+  },
+  tare() {   // TARE short press
+    if (st.mode === 'hold') { for (const n of this.stuck) send(0x80, n, 0); this.stuck.clear(); }
+    if (st.mode === 'arp') { this.arp = []; if (this.arpNote >= 0) send(0x80, this.arpNote, 0); this.arpNote = -1; this.stopArp(); }
+  },
+  startArp() {
+    if (this.timer) return;
+    const step = () => {
+      if (!this.arp.length) return this.stopArp();
+      if (this.arpNote >= 0 && this.arpNote !== this.L) send(0x80, this.arpNote, 0);
+      this.idx = (this.idx + 1) % this.arp.length;
+      this.arpNote = this.arp[this.idx];
+      if (this.arpNote >= 0) send(0x90, this.arpNote, 127);
+    };
+    step(); this.timer = setInterval(step, 500);   // 120 BPM, Arp Rate x1
+  },
+  stopArp() { clearInterval(this.timer); this.timer = null; },
+  reset() {
+    this.tare(); this.stopArp(); this.arp = []; this.stuck.clear();
+    if (this.L >= 0) send(0x80, this.L, 0); this.L = -1;
+  },
+};
+let dragging = false;
+cv.addEventListener('pointerdown', e => { dragging = true; cv.setPointerCapture(e.pointerId); sim.setWeight(1 - e.clientY / H); });
+cv.addEventListener('pointermove', e => { if (dragging) sim.setWeight(1 - e.clientY / H); });
+cv.addEventListener('pointerup', () => { dragging = false; sim.setWeight(0); });
+cv.addEventListener('pointercancel', () => { dragging = false; sim.setWeight(0); });
+
+addEventListener('keydown', e => {
+  hudActive = performance.now();
+  const k = e.key.toLowerCase();
+  if (k === ' ' || k === '+' || k === '=') { e.preventDefault(); sim.plus(); }
+  else if (k === 't') sim.tare();
+  else if (k === 'm') { const i = (['hold', 'arp'].indexOf(st.mode) + 1) % 2; setMode(['hold', 'arp'][i], 'manual'); }
+  else if (k === 'b') blendScreen = !blendScreen;
+  else if (k === 'h') hudHidden = !hudHidden;
+  else if (k === 'g') gramsHidden = !gramsHidden;
+  else if (k === 'c') allOff();
+  else if (k === 'f') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+});
+addEventListener('pointermove', () => { hudActive = performance.now(); });
+
+// ---------------------------------------------------------------- HUD
+const hud = document.getElementById('hud');
+const gramsEl = document.getElementById('grams');
+let gramsShown = 0, gramsHidden = false;
+function updateHud(now) {
+  const name = st.lastNote >= 0 ? NOTE_NAMES[st.lastNote % 12] + (Math.floor(st.lastNote / 12) - 1) : '–';
+  hud.innerHTML =
+    `<b>${midi.isScales ? '● Scales' : '○ ' + midi.status}</b> · mode <b>${st.mode.toUpperCase()}</b> (${st.modeSrc}) · note <b>${name}</b> · CC${CFG.ccNum} <b>${st.cc}</b> · <b>≈ ${Math.round(grams())} g</b> (±${(gramsStep() / 2).toFixed(1)}, sens ${st.sens}) · shapes ${shapes.length}${blendScreen ? ' · screen' : ''}<br>` +
+    `drag ↕ = weight · space = + · T = tare · M = hold/arp · B = blend · C = clear · G = grams · F = fullscreen · H = hide`;
+  hud.style.opacity = hudHidden ? 0 : (now - hudActive > 4000 ? 0.15 : 1);
+  // big weight readout: rolls smoothly to the new value, rounded to whole grams
+  const g = grams();
+  gramsShown += (g - gramsShown) * 0.25;
+  if (Math.abs(g - gramsShown) < 0.5) gramsShown = g;
+  // there is weight (a note sounds) but less than one CC step: show the bound instead of 0
+  const below = st.cc === 0 && st.sensorNote >= 0;
+  const over = st.cc >= 127;
+  const txt = below ? '&lt;' + Math.ceil(gramsStep() + CFG.tareMarginCounts / CFG.countsPerGram) + '<small>g</small>'
+    : (over ? '&gt;' : '') + Math.round(gramsShown) + '<small>g</small>';
+  if (txt !== gramsEl.dataset.v) { gramsEl.innerHTML = txt; gramsEl.dataset.v = txt; }
+  gramsEl.style.opacity = gramsHidden ? 0 : (g > 0 || below ? 0.92 : 0.25);
+}
+
+// ---------------------------------------------------------------- start
+document.getElementById('start').addEventListener('click', e => {
+  e.currentTarget.remove();
+  bells.init(); if (bells.ac.state === 'suspended') bells.ac.resume();
+  initMidi();
+});
+window.app = { sim, setMode, frame, bells, st, shapes, midiLog, midi, onMidi, grams, getLive: () => live };   // for debugging in the console
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
