@@ -79,6 +79,12 @@
     <button id="mapClear">Delete all</button>
     <button id="mapClose">Close</button>
   </div>
+  <h3 style="margin-top:14px">Firmware</h3>
+  <p>The note map needs the Scales firmware with weight notes.
+    1. <a href="firmware/scales-weight-notes.uf2" download style="color:inherit">Download it</a>.
+    2. Press <b>Update mode</b>: Scales restarts as a drive called RPI-RP2.
+    3. Copy the file onto that drive: Scales restarts with the new firmware.</p>
+  <div class="row"><button id="fwUpdate">Update mode</button></div>
 </div>
 <div id="hud"></div>
 <div id="start">click to start<br><span>connect Scales via USB · or drag up/down on screen to simulate weight</span></div>
@@ -778,7 +784,7 @@ function toggleMap(open) {
 function renderMap() {
   const status = nmEl('mapStatus');
   if (!midi.isScales) status.innerHTML = '<p class="warn">Connect Scales (click to start, allow MIDI with SysEx).</p>';
-  else if (noteMap.supported === false) status.innerHTML = '<p class="warn">This firmware has no note map. Flash the build from the sasha/weight-notes branch.</p>';
+  else if (noteMap.supported === false) status.innerHTML = '<p class="warn">This firmware has no note map. Update it below (Firmware).</p>';
   else status.innerHTML = '';
   nmEl('mapOn').checked = noteMap.on;
   const rows = noteMap.points.map((p, i) => p && { ...p, i }).filter(Boolean).sort((a, b) => a.counts - b.counts);
@@ -789,6 +795,12 @@ function renderMap() {
   nmEl('mapLearn').disabled = !midi.isScales || noteMap.supported === false;
 }
 nmEl('mapBtn').addEventListener('click', () => toggleMap());
+// reboot Scales into the USB bootloader (action 1); a drive RPI-RP2 appears, the .uf2 is copied onto it
+nmEl('fwUpdate').addEventListener('click', () => {
+  if (!midi.isScales) { alert('Connect Scales by USB and allow MIDI with SysEx first.'); return; }
+  if (!confirm('Scales restarts as a drive RPI-RP2. Copy scales-weight-notes.uf2 onto it to update. Go on?')) return;
+  sendScales([0x65, 1, 1]);
+});
 nmEl('mapClose').addEventListener('click', () => toggleMap(false));
 nmEl('mapLearn').addEventListener('click', () => {
   const note = +nmEl('mapNote').value;

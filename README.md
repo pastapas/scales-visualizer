@@ -3,14 +3,21 @@
 Web visualizer and FM bell synth for **Playtronica Scales** (the weight → MIDI controller).
 Every note the weight plays becomes a 3D resin object on a black screen; size follows the weight (CC90).
 
-## Run
+## Open it
+
+**Online:** https://pastapas.github.io/scales-visualizer/ — open in **Chrome** (Web MIDI), connect Scales by USB, click
+the screen and allow MIDI **with SysEx** (the page asks the device for its play mode, CC number and sensitivity).
+
+**Locally:**
 
 ```bash
 python3 -m http.server 8768 --directory .
 ```
 
-Open http://localhost:8768 in **Chrome** (Web MIDI), connect Scales by USB, click the screen and allow MIDI **with SysEx**
-(the page asks the device for its play mode, CC number and sensitivity).
+then open http://localhost:8768.
+
+**New firmware** (note map: teach the scales your own objects, press to bend): see [`firmware/README.md`](firmware/README.md)
+— download the `.uf2`, press **K → Update mode**, copy the file onto the RPI-RP2 drive.
 
 Without a device: drag up/down on the screen to simulate weight.
 
@@ -68,9 +75,9 @@ The load cell is a Sensorcon SC133-3KG (1.0 ± 0.15 mV/V), so other units can di
 
 The firmware assumes 700 counts/g, so the real Sensitivity ranges are ~225 / 450 / 900 / 1350 / 1800 g (settings 0–4).
 
-Grams are computed from CC90, so the precision is one CC step: 1.8 g (sens 0) … 14 g (sens 4). Below one step the screen
-shows a bound (`<15 g`). Precise weight on every range needs a firmware change: the device would have to send the weight
-itself (see `firmware/README.md`).
+With the released firmware the weight is computed from CC90, so the precision is one CC step: 1.8 g (sens 0) … 14 g (sens 4),
+shown with `≈`; below one step the screen shows a bound. With the firmware from `firmware/` the device sends the weight itself
+at full precision on every range.
 
 How the calibration was measured: SysEx `F0 0B 14 0D 02 F7` (logging on) and `F0 0B 14 0D 00 F7` (test mode) make the device
 print `SCALE VALUE: <raw>` on its USB serial port while weight is on. `F0 0B 14 0D 01 F7` / `03` switch it back.
@@ -92,3 +99,7 @@ const ev = (await (await fetch('logs/session3.txt')).text()).trim().split(/\s+/)
 const t0 = performance.now();
 for (const [t, a, b, c] of ev) a === 255 ? app.setMode(['hold','arp','pitch','sens','bpm'][b], 'device') : app.onMidi({ data: [a, b, c], timeStamp: t0 + t });
 ```
+
+## License
+
+© Playtronica. All rights reserved. You are welcome to use the visualizer and the firmware with your Scales.
